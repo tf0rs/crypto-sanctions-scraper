@@ -33,6 +33,18 @@ def _clean(value):
 
 
 def _parse_addresses(remarks):
+    # OFAC's own published CSV truncates the last address in a long
+    # "alt. Digital Currency Address" list — not a parsing bug here, verified
+    # against the raw CSV-parsed field directly. Confirmed on real entities:
+    # SUEX OTC, S.R.O. (13 addresses listed, 13th cut to "1B64QRxf" — 8 chars,
+    # not a valid BTC address) and CHATEX (last address cut to a single "3").
+    # Almost certainly a length limit somewhere in OFAC's own system that
+    # clips the Remarks field, which structurally always lands at the tail of
+    # the last list entry. These short/invalid fragments are stored as-is
+    # rather than dropped or guessed at — they're what OFAC actually
+    # published, and silently discarding them would lose the (still useful)
+    # fact that the entity has another address at all, even if its exact
+    # value isn't recoverable from this source.
     addresses = []
     for segment in remarks.split(";"):
         match = DIGITAL_CURRENCY_RE.search(segment)

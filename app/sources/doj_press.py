@@ -78,6 +78,13 @@ def run(session):
     total = _total_count()
     last_page = total // PAGE_SIZE
     stop_at_url = get_checkpoint(session, SCRAPER_NAME)
+    # Fetched once up front rather than queried per-item inside the loop:
+    # sources now run concurrently (see scraper.py), each on its own
+    # session/connection, and a per-item session.query() mid-loop triggers
+    # SQLAlchemy's autoflush — which would flush pending inserts and hold a
+    # write transaction open for most of the run instead of just at the
+    # final commit, risking other sources' commits blocking on this one.
+    existing_urls = {row.url for row in session.query(PressRelease.url).filter_by(source="DOJ")}
 
     inserted = 0
     page = last_page
@@ -102,7 +109,7 @@ def run(session):
             if not keywords:
                 continue
 
-            if session.query(PressRelease).filter_by(url=item["url"]).one_or_none():
+            if item["url"] in existing_urls:
                 continue
 
             session.add(
@@ -116,6 +123,7 @@ def run(session):
                     raw_markdown=markdownify(item.get("body", "")).strip(),
                 )
             )
+            existing_urls.add(item["url"])
             inserted += 1
 
         if hit_checkpoint:

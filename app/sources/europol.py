@@ -84,6 +84,12 @@ def _latest_path():
 def run(session):
     stop_at_url = get_checkpoint(session, SCRAPER_NAME)
     path = _latest_path()
+    # Fetched once up front rather than queried per-item inside the loop —
+    # see doj_press.py's identical comment: sources now run concurrently,
+    # each on its own connection, and a per-item session.query() mid-loop
+    # would trigger autoflush and hold a write transaction open for most of
+    # the run instead of just at the final commit.
+    existing_urls = {row.url for row in session.query(PressRelease.url).filter_by(source="EUROPOL")}
 
     inserted = 0
     walked = 0
@@ -102,7 +108,7 @@ def run(session):
         title = node["title"]
         body_html = node.get("body", "")
         keywords = _matched_keywords(f"{title}\n{body_html}")
-        if keywords and not session.query(PressRelease).filter_by(url=url).one_or_none():
+        if keywords and url not in existing_urls:
             session.add(
                 PressRelease(
                     source="EUROPOL",
@@ -114,6 +120,7 @@ def run(session):
                     raw_markdown=markdownify(body_html).strip(),
                 )
             )
+            existing_urls.add(url)
             inserted += 1
 
         path = node.get("navigation", {}).get("previous")

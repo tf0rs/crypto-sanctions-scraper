@@ -12,7 +12,15 @@ DB_PATH = os.environ.get("DB_PATH", DEFAULT_DB_PATH)
 
 
 def get_session():
-    engine = create_engine(f"sqlite:///{DB_PATH}")
+    # Sources now run concurrently (see scraper.py), each with its own
+    # connection to the same file. SQLite only allows one writer at a time
+    # regardless of WAL mode, so a generous busy timeout matters here — the
+    # default is 5s, easily exceeded if two sources' commits happen to
+    # overlap. WAL mode itself is what lets a slow writer not block fast
+    # readers/other sources from making progress in the meantime.
+    engine = create_engine(f"sqlite:///{DB_PATH}", connect_args={"timeout": 60})
+    with engine.begin() as conn:
+        conn.exec_driver_sql("PRAGMA journal_mode=WAL")
     Base.metadata.create_all(engine)
     return sessionmaker(bind=engine)()
 

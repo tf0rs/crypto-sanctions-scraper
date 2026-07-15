@@ -2,7 +2,7 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin
 
-import requests
+import http_client
 from bs4 import BeautifulSoup
 from markdownify import markdownify
 
@@ -62,8 +62,7 @@ def _matched_keywords(text):
 
 
 def _action_urls():
-    resp = requests.get(SITEMAP_URL, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    resp = http_client.get(SITEMAP_URL, timeout=REQUEST_TIMEOUT)
     urls = set()
     for match in re.finditer(r"<loc>([^<]+)</loc>", resp.text):
         url = match.group(1)
@@ -73,8 +72,7 @@ def _action_urls():
 
 
 def _extract_page(url):
-    resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    resp = http_client.get(url, timeout=REQUEST_TIMEOUT)
     soup = BeautifulSoup(resp.text, "html.parser")
 
     title = soup.title.string if soup.title else url

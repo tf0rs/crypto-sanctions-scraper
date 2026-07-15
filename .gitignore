@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 venv/
+.venv/
 .env
 run_output.txt
 commit_message.txt

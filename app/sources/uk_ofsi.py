@@ -2,8 +2,7 @@ import csv
 import io
 import re
 
-import requests
-
+import http_client
 from models import CryptoAddress, SanctionedEntity
 
 # Confirmed stable, unauthenticated, no token required.
@@ -56,8 +55,7 @@ def _parse_addresses(other_info):
 
 
 def fetch_rows():
-    resp = requests.get(OFSI_CSV_URL, timeout=60)
-    resp.raise_for_status()
+    resp = http_client.get(OFSI_CSV_URL, timeout=60)
     text = resp.content.decode("utf-8-sig")
     _banner, header_and_rows = text.split("\n", 1)
     reader = csv.DictReader(io.StringIO(header_and_rows))

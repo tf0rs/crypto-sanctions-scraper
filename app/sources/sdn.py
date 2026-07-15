@@ -2,8 +2,7 @@ import csv
 import io
 import re
 
-import requests
-
+import http_client
 from models import CryptoAddress, SanctionedEntity
 
 # Redirects (302) to a signed S3 URL on sanctionslistservice.ofac.treas.gov —
@@ -44,8 +43,7 @@ def _parse_addresses(remarks):
 
 
 def fetch_rows():
-    resp = requests.get(SDN_CSV_URL, timeout=60)
-    resp.raise_for_status()
+    resp = http_client.get(SDN_CSV_URL, timeout=60)
     reader = csv.reader(io.StringIO(resp.text))
     for row in reader:
         if len(row) < len(COLUMNS):

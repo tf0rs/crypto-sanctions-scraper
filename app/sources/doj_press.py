@@ -2,7 +2,7 @@ import re
 import time
 from datetime import datetime, timezone
 
-import requests
+import http_client
 from markdownify import markdownify
 
 from db import get_checkpoint, set_checkpoint
@@ -60,14 +60,12 @@ def _parse_epoch(value):
 
 
 def _total_count():
-    resp = requests.get(API_URL, params={"page": 0}, timeout=30)
-    resp.raise_for_status()
+    resp = http_client.get(API_URL, params={"page": 0}, timeout=30)
     return int(resp.json()["metadata"]["resultset"]["count"])
 
 
 def _fetch_page(page):
-    resp = requests.get(API_URL, params={"page": page}, timeout=30)
-    resp.raise_for_status()
+    resp = http_client.get(API_URL, params={"page": page}, timeout=30)
     return resp.json()["results"]
 
 

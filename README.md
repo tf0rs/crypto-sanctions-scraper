@@ -15,18 +15,22 @@ in a SQLite database committed to this repo.
 
 ## Status
 
-Two sources are fully implemented: `app/sources/sdn.py` (OFAC SDN list) and
-`app/sources/doj_press.py` (DOJ press releases). The rest —
-`ofac_press.py`, `fincen.py`, `eu_sanctions.py`, `uk_ofsi.py`, `europol.py` —
-are stubs; each module's docstring notes what was confirmed about that
-source's endpoint during initial research and what's still unverified.
+All seven sources are implemented and run concurrently (`app/scraper.py`):
+`sdn.py`, `uk_ofsi.py`, and `eu_sanctions.py` extract crypto-linked
+sanctioned entities; `doj_press.py`, `fincen.py`, `ofac_press.py`, and
+`europol.py` extract matching press releases/advisories. Each module's
+comments document what was confirmed about that source during
+development — several turned out to have no public API/feed and needed
+reverse-engineering (an internal JSON endpoint for Europol, a sitemap-driven
+crawl for FinCEN/OFAC), and a few keyword-matching bugs were found and
+fixed along the way (see git history for specifics).
 
 ## Running locally
 
 ```bash
 cd app
-pip install -r requirements.txt
-python scraper.py
+uv sync
+uv run python scraper.py
 ```
 
 This creates/updates `data/sanctions.db` (SQLite). No environment variables

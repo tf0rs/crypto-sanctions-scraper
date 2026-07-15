@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 from urllib.parse import urljoin
 
-import requests
+import http_client
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
@@ -60,15 +60,13 @@ def _matched_keywords(text):
 
 
 def _advisory_urls():
-    resp = requests.get(SITEMAP_URL, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    resp = http_client.get(SITEMAP_URL, timeout=REQUEST_TIMEOUT)
     pattern = rf"<loc>({re.escape(ADVISORY_PREFIX)}[^<]+)</loc>"
     return sorted(set(re.findall(pattern, resp.text)))
 
 
 def _extract_page(url):
-    resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-    resp.raise_for_status()
+    resp = http_client.get(url, timeout=REQUEST_TIMEOUT)
     soup = BeautifulSoup(resp.text, "html.parser")
 
     title = soup.title.string if soup.title else url
@@ -89,8 +87,7 @@ def _extract_page(url):
     pdf_link = soup.select_one('a[href$=".pdf"]')
     if pdf_link:
         pdf_url = urljoin(BASE_URL, pdf_link["href"])
-        pdf_resp = requests.get(pdf_url, timeout=REQUEST_TIMEOUT)
-        pdf_resp.raise_for_status()
+        pdf_resp = http_client.get(pdf_url, timeout=REQUEST_TIMEOUT)
         reader = PdfReader(io.BytesIO(pdf_resp.content))
         pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)
 

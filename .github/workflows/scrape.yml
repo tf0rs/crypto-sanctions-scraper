@@ -13,12 +13,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
+          enable-cache: true
+          cache-dependency-glob: "app/uv.lock"
+      - run: uv sync --locked
         working-directory: app
-      - run: python scraper.py | tee ../run_output.txt
+      - run: uv run python scraper.py | tee ../run_output.txt
         working-directory: app
       - name: Commit updated data
         # Sources run independently now (see scraper.py) — one failing

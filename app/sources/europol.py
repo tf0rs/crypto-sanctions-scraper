@@ -1,9 +1,8 @@
 import re
 import time
 from datetime import datetime, timezone
-from urllib.parse import quote
 
-import requests
+import http_client
 from markdownify import markdownify
 
 from db import get_checkpoint, set_checkpoint
@@ -67,14 +66,12 @@ def _matched_keywords(text):
 
 
 def _fetch_node(path):
-    resp = requests.get(NODE_API_URL, params={"url": path}, timeout=30)
-    resp.raise_for_status()
+    resp = http_client.get(NODE_API_URL, params={"url": path}, timeout=30)
     return resp.json()
 
 
 def _latest_path():
-    resp = requests.get(RSS_URL, timeout=30)
-    resp.raise_for_status()
+    resp = http_client.get(RSS_URL, timeout=30)
     match = re.search(r"<item><title>.*?</title><link>([^<]+)</link>", resp.text)
     if not match:
         return None

@@ -1,5 +1,0 @@
-sqlalchemy
-requests
-markdownify
-beautifulsoup4
-pypdf

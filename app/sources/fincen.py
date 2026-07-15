@@ -41,7 +41,18 @@ KEYWORDS = [
     "ransomware", "cryptocurrency", "crypto", "bitcoin", "virtual currency",
     "convertible virtual currency", "digital asset", "darknet",
 ]
-KEYWORD_RE = re.compile("|".join(re.escape(k) for k in KEYWORDS), re.IGNORECASE)
+# "crypto" needs care, not a plain \bcrypto\b: that misses genuine hits like
+# "cryptocurrencies" (plural) and "cryptojacking" (\b requires a non-word
+# char right after "crypto", which those don't have) while a fully unbounded
+# match wrongly hits "cryptography"/"cryptographic". Both failure modes were
+# confirmed on europol.py's data, which shares this exact keyword-matching
+# approach. A negative lookahead threads the needle: allow any continuation
+# except "graph".
+_KEYWORD_PARTS = [
+    r"\bcrypto(?!graph)" if kw == "crypto" else r"\b" + re.escape(kw) + r"\b"
+    for kw in KEYWORDS
+]
+KEYWORD_RE = re.compile("(?:" + "|".join(_KEYWORD_PARTS) + ")", re.IGNORECASE)
 
 
 def _matched_keywords(text):

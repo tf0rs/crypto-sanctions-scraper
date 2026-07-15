@@ -26,7 +26,24 @@ KEYWORDS = [
     "digital asset", "money laundering", "sanctions", "ofac", "darknet",
     "cyber", "hacking",
 ]
-KEYWORD_RE = re.compile("|".join(re.escape(k) for k in KEYWORDS), re.IGNORECASE)
+# "crypto" and "cyber" need care, not a plain \bterm\b. A full \b...\b on
+# "crypto" misses genuine hits like "cryptocurrencies" (plural) and
+# "cryptojacking" — \b requires a non-word char right after "crypto", which
+# those don't have — while an unbounded match wrongly hits
+# "cryptography"/"cryptographic". Both failure modes confirmed on
+# europol.py's data, which shares this exact keyword-matching approach. A
+# negative lookahead threads the needle for "crypto": allow any
+# continuation except "graph". "cyber" gets no trailing boundary at all, on
+# purpose, so it still matches compounds like "cybercrime"/"cybersecurity".
+_KEYWORD_PARTS = []
+for kw in KEYWORDS:
+    if kw == "crypto":
+        _KEYWORD_PARTS.append(r"\bcrypto(?!graph)")
+    elif kw == "cyber":
+        _KEYWORD_PARTS.append(r"\bcyber")
+    else:
+        _KEYWORD_PARTS.append(r"\b" + re.escape(kw) + r"\b")
+KEYWORD_RE = re.compile("(?:" + "|".join(_KEYWORD_PARTS) + ")", re.IGNORECASE)
 
 
 def _matched_keywords(text):

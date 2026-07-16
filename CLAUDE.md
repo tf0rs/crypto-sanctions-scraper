@@ -32,16 +32,50 @@ gh workflow run scrape.yml --repo <owner>/crypto-sanctions-scraper
 
 ## Architecture
 
-**OFAC's SDN list embeds crypto wallet addresses as free text inside the
-Remarks column, not as a structured field.** The CSV
-(`https://www.treasury.gov/ofac/downloads/sdn.csv`, no header row, columns
-documented in `app/sources/sdn.py`) has clauses like `Digital Currency
-Address - ETH 0x098B71...; alt. Digital Currency Address - ETH 0xa0e1c8...`
-mixed in with other remarks (DOB, aliases, program info). `sdn.py` parses
-these with a regex over semicolon-split segments rather than treating the
-column as structured data. Only entities with at least one parsed address are
-stored — the full list is ~19k rows and the vast majority have no crypto
-exposure, which isn't the point of this project.
+**OFAC's SDN CSV (`sdn.csv`) caps its Remarks field at exactly 1000
+characters, which silently drops most of an entity's address list once it
+has enough addresses to exceed that cap — not just the last one.**
+`sdn.py` originally regex-parsed digital currency addresses straight out of
+the CSV's free-text Remarks column, and documented (commit `1625f6a`) that
+the *last* address in a long list sometimes got cut mid-string. Later
+investigation (prompted by asking "is this dataset really complete?") found
+the real scope was much bigger: 23 of the 90 SDN entities with crypto
+exposure hit the CSV's exact 1000-character Remarks cap, and for at least
+one of them (ISIL KHORASAN) the CSV yielded only 9 of 134 real addresses —
+confirmed against OFAC's own July 2026 designation-update announcement page,
+independently scraped by `ofac_press.py`. This affected roughly a quarter of
+tracked entities, including LAZARUS GROUP and GARANTEX.
+
+**Fixed by switching address extraction to `SDN_ADVANCED.XML`
+(`sanctionslistservice.ofac.treas.gov/api/PublicationPreview/exports/SDN_ADVANCED.XML`),
+OFAC's structured export, which has no truncation because each address is
+its own `Feature` element rather than a shared text blob.** `sdn.py` still
+uses `sdn.csv` for entity metadata (name/entity_type/program/remarks) — only
+address extraction moved. The chain-ticker mapping is read from the XML's own
+`FeatureType` reference table (any label starting with `"Digital Currency
+Address - "`) rather than a hardcoded ticker list, which incidentally
+surfaced 4 chains (`BSV`, `XRP`, `ARB`, `BSC`) a hand-maintained allowlist
+would have missed. Entity-level detection (which entities count as
+crypto-exposed at all) was cross-checked between the old CSV-substring
+approach and the new XML-feature approach across the full file and matched
+exactly — the CSV's cap distorted address *counts* per entity, not *which*
+entities got flagged in the first place. No stable `treasury.gov` alias URL
+exists for this file the way `sdn.csv` has one — `sdn.py` hits
+`sanctionslistservice.ofac.treas.gov` directly; a `curl` TLS failure against
+that host during development turned out to be a local sandbox cert-store
+quirk, not a real connectivity problem (`requests`/`http_client` connect
+fine).
+
+**Switching `sdn.py`'s address source also required syncing away stale rows,
+not just inserting new ones — the old append-only upsert logic would have
+left truncated garbage from the pre-XML CSV-regex era sitting in
+`crypto_addresses` forever.** The address-sync loop now deletes any stored
+`CryptoAddress` row whose value isn't in the current run's XML-derived
+target set, in addition to inserting missing ones — confirmed necessary in
+practice, not theoretical: after the initial XML migration, 6 short/invalid
+fragments (e.g. SUEX OTC's old `"1B64QRxf"`, CHATEX's old `"3"`) were still
+present until this sync logic ran once. This also means the table now
+self-corrects if OFAC ever delists an address, not just when it adds one.
 
 **`justice.gov`'s HTML pages are behind an Akamai bot-challenge that returns a
 JS interstitial instead of content to any non-browser client** (confirmed:

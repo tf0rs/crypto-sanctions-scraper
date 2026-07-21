@@ -1,4 +1,5 @@
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -28,9 +29,26 @@ RECENT_ACTION_RE = re.compile(r"/recent-actions/(\d{8})(?:_\d+)?$")
 
 # ofac.treasury.gov sits behind the same slow Akamai edge as fincen.gov
 # (confirmed: dur=10101 on a cache HIT for /recent-actions) — not
-# bot-protection, just slow.
+# bot-protection, just slow (~8-12s per request, regardless of concurrency —
+# see FETCH_WORKERS below). A full backfill of the ~3.1k known action pages
+# would take ~9 hours fetched sequentially, which is why this was originally
+# capped at 50 pages/run (a ~16-day backfill at 4 runs/day). Parallelizing
+# fetches (FETCH_WORKERS) cuts wall-clock time per run by roughly that
+# factor, which is what makes a much higher per-run cap practical.
 REQUEST_TIMEOUT = 45
-MAX_ACTIONS_PER_RUN = 50
+MAX_ACTIONS_PER_RUN = 500
+
+# Since the bottleneck is pure per-request network/edge latency (not
+# something that serializes on OFAC's end — see below), pages are fetched
+# concurrently instead of one at a time. 10 was chosen after testing
+# directly against ofac.treasury.gov rather than assumed: a 30-request burst
+# and a sustained 120-request run at this concurrency both came back 100%
+# HTTP 200 with steady ~8-12s per-request timing throughout (no widening,
+# no errors) — no sign of rate-limiting or WAF pushback at this level.
+# Fetching only (network I/O) is parallelized; keyword matching and all
+# database writes stay strictly sequential in run()'s main thread — a
+# SQLAlchemy session isn't safe to touch from multiple threads.
+FETCH_WORKERS = 10
 
 # Deliberately excludes "sanctions", "ofac", and "money laundering" — this
 # is OFAC's own site, so "sanctions" and "OFAC" are near-universal the same
@@ -109,15 +127,42 @@ def _extract_page(url):
     return title, published_at, full_markdown
 
 
+def _batch_urls(all_urls, stop_at_url):
+    """Which URLs this run should fetch: newest-first, stopping at the last
+    URL seen on a prior run (checkpoint) or MAX_ACTIONS_PER_RUN, whichever
+    comes first. This only needs the URL list itself (from sitemap.xml), not
+    page content, so it's resolved before any fetching happens — letting the
+    actual fetches run concurrently as a flat batch instead of one at a time."""
+    batch = []
+    newest_url_seen = None
+    for url in reversed(all_urls):  # newest first
+        if len(batch) >= MAX_ACTIONS_PER_RUN:
+            break
+        if newest_url_seen is None:
+            newest_url_seen = url
+        if stop_at_url and url == stop_at_url:
+            break
+        batch.append(url)
+    return batch, newest_url_seen
+
+
 def run(session):
     """Walk OFAC's recent-actions archive (~3.1k dated entries per
     sitemap.xml, one page per day of designations/updates, sometimes several
     per day) newest-first, stopping at the last URL seen on a prior run —
     same checkpoint-by-URL pattern as doj_press.py. Unlike fincen.py, this
     corpus is too large to store in full, so matched_keywords gates storage
-    here, not just tags it."""
+    here, not just tags it.
+
+    Page fetches run concurrently (FETCH_WORKERS) since the bottleneck is
+    per-request network latency, not anything CPU-bound or database-related.
+    Keyword matching and all session writes happen afterward, sequentially,
+    in this function's own thread — a SQLAlchemy session isn't safe to touch
+    from multiple threads, so nothing DB-related happens inside the pool."""
     urls = _action_urls()
     stop_at_url = get_checkpoint(session, SCRAPER_NAME)
+    batch, newest_url_seen = _batch_urls(urls, stop_at_url)
+
     # Fetched once up front rather than queried per-item inside the loop —
     # see doj_press.py's identical comment: sources now run concurrently,
     # each on its own connection, and a per-item session.query() mid-loop
@@ -125,21 +170,18 @@ def run(session):
     # the run instead of just at the final commit.
     existing_urls = {row.url for row in session.query(PressRelease.url).filter_by(source="OFAC_PRESS")}
 
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        # pool.map preserves input order, so zipping against `batch` below
+        # lines results back up with their URLs correctly. Consuming it via
+        # list() also means the first exception raised by any fetch (after
+        # http_client's own retries are exhausted) propagates out of this
+        # function immediately, matching the previous sequential version's
+        # all-or-nothing failure behavior — a bad page still fails the whole
+        # run rather than silently dropping data.
+        fetched = list(pool.map(_extract_page, batch))
+
     inserted = 0
-    walked = 0
-    newest_url_seen = None
-
-    for url in reversed(urls):  # newest first
-        if walked >= MAX_ACTIONS_PER_RUN:
-            break
-        walked += 1
-
-        if newest_url_seen is None:
-            newest_url_seen = url
-        if stop_at_url and url == stop_at_url:
-            break
-
-        title, published_at, full_markdown = _extract_page(url)
+    for url, (title, published_at, full_markdown) in zip(batch, fetched):
         keywords = _matched_keywords(f"{title}\n{full_markdown}")
         if keywords and url not in existing_urls:
             session.add(
@@ -158,4 +200,4 @@ def run(session):
     if newest_url_seen:
         set_checkpoint(session, SCRAPER_NAME, newest_url_seen)
     session.commit()
-    print(f"[ofac_press] walked {walked} action(s) ({len(urls)} total known), inserted {inserted} matching")
+    print(f"[ofac_press] walked {len(batch)} action(s) ({len(urls)} total known), inserted {inserted} matching")

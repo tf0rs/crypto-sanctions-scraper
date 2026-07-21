@@ -149,14 +149,34 @@ def run(session):
         # address not present in this run's authoritative XML list — whether
         # it's old truncated garbage or an address OFAC has since delisted —
         # gets removed here.
+        #
+        # `addresses` (from the XML) is deduplicated into a dict keyed by
+        # address before use, not iterated as-is — OFAC's own XML contains a
+        # small number of genuine duplicate Feature entries within a single
+        # entity (confirmed: 956 raw entries vs 942 unique (entity, address)
+        # pairs across the full file). An earlier version of this loop
+        # iterated `addresses` directly and checked membership against a
+        # snapshot dict that was never updated as new rows were added within
+        # the loop — for an entity with a duplicate entry, both occurrences
+        # passed the "not already stored" check and both got session.add()'d,
+        # violating the (entity_id, address) unique constraint at flush time.
+        # This only surfaced on a genuinely empty database — every prior test
+        # happened to run against a DB that already had that address from an
+        # earlier run, which masked the bug (the address was already in
+        # `existing_by_address`, so the duplicate never reached session.add()
+        # twice). Deduplicating up front removes the possibility entirely,
+        # regardless of what state the database starts in.
+        target_by_address = {}
+        for chain, address in addresses:
+            target_by_address.setdefault(address, chain)
+
         existing_by_address = {a.address: a for a in entity.addresses}
-        target_addresses = {address for _chain, address in addresses}
 
         for stale_address, stale_row in existing_by_address.items():
-            if stale_address not in target_addresses:
+            if stale_address not in target_by_address:
                 session.delete(stale_row)
 
-        for chain, address in addresses:
+        for address, chain in target_by_address.items():
             if address not in existing_by_address:
                 session.add(CryptoAddress(entity_id=entity.id, address=address, chain=chain))
 

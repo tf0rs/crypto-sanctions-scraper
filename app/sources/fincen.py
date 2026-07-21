@@ -1,5 +1,6 @@
 import io
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from urllib.parse import urljoin
 
@@ -21,12 +22,23 @@ SCRAPER_NAME = "fincen"
 # FinCEN's edge takes ~8-10s to respond even on a cache hit (confirmed by
 # testing, server-timing header showed dur=8000 on a HIT) — not
 # bot-protection, just slow. Use a generous timeout, not a short one that'll
-# misread slowness as unreachable.
+# misread slowness as unreachable. Same edge config as ofac.treasury.gov
+# (see ofac_press.py), which is why this source gets the same fix: pages are
+# fetched concurrently (FETCH_WORKERS) instead of one at a time, since the
+# bottleneck is per-request network latency, not anything that serializes on
+# FinCEN's end. Verified directly against fincen.gov (not just assumed from
+# the OFAC result, since it's a different host) — a 20-request burst at 10
+# workers came back 100% HTTP 200 with no widening of per-request timing.
 REQUEST_TIMEOUT = 45
-# Each advisory costs two slow requests (HTML page + its PDF), so a full
-# backfill of the ~194-item list is deliberately spread across several
-# 6-hourly runs instead of done in one long invocation.
-MAX_ADVISORIES_PER_RUN = 30
+FETCH_WORKERS = 10
+# Each advisory still costs two slow sequential requests within its own
+# fetch (HTML page + its PDF) — those two aren't parallelized against each
+# other, since the PDF link is only known after parsing the HTML response.
+# Raised from 30 now that fetches run concurrently: at ~10 workers this
+# processes roughly 10x faster per run, so the full ~194-item backfill (already
+# complete as of this writing) and any future backlog clears in a fraction
+# of the time a sequential walk would take.
+MAX_ADVISORIES_PER_RUN = 194
 
 # Not used as a storage gate (see run() — every advisory is stored
 # regardless), only to populate matched_keywords for later querying.
@@ -102,16 +114,29 @@ def run(session):
     risk of silently dropping something relevant (see the KEYWORDS comment
     above for how that nearly went wrong already). matched_keywords is
     still computed and stored so the crypto/ransomware-specific subset stays
-    a queryable slice, not a storage decision."""
+    a queryable slice, not a storage decision.
+
+    Page fetches run concurrently (FETCH_WORKERS) — see the REQUEST_TIMEOUT
+    comment above. Keyword matching and all session writes happen
+    afterward, sequentially, in this function's own thread — a SQLAlchemy
+    session isn't safe to touch from multiple threads, so nothing
+    DB-related happens inside the pool."""
     urls = _advisory_urls()
     already_stored = {
         row.url for row in session.query(PressRelease.url).filter_by(source="FINCEN")
     }
     todo = [u for u in urls if u not in already_stored][:MAX_ADVISORIES_PER_RUN]
 
+    with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+        # pool.map preserves input order, so zipping against `todo` below
+        # lines results back up with their URLs correctly. See
+        # ofac_press.py's identical comment for why list()-consuming here
+        # (rather than as_completed) preserves the previous sequential
+        # version's all-or-nothing failure behavior.
+        fetched = list(pool.map(_extract_page, todo))
+
     inserted = 0
-    for url in todo:
-        title, published_at, full_text = _extract_page(url)
+    for url, (title, published_at, full_text) in zip(todo, fetched):
         keywords = _matched_keywords(f"{title}\n{full_text}")
         session.add(
             PressRelease(

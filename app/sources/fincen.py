@@ -2,7 +2,7 @@ import io
 import re
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import http_client
 from bs4 import BeautifulSoup
@@ -96,9 +96,16 @@ def _extract_page(url):
     body_text = body_field.get_text(" ", strip=True) if body_field else ""
 
     pdf_text = ""
-    pdf_link = soup.select_one('a[href$=".pdf"]')
-    if pdf_link:
-        pdf_url = urljoin(BASE_URL, pdf_link["href"])
+    base_host = urlparse(BASE_URL).netloc
+    pdf_url = None
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        if href.lower().endswith(".pdf"):
+            candidate = urljoin(BASE_URL, href)
+            if urlparse(candidate).netloc == base_host:
+                pdf_url = candidate
+                break
+    if pdf_url:
         pdf_resp = http_client.get(pdf_url, timeout=REQUEST_TIMEOUT)
         reader = PdfReader(io.BytesIO(pdf_resp.content))
         pdf_text = "\n".join(page.extract_text() or "" for page in reader.pages)

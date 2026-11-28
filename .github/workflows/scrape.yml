@@ -12,21 +12,23 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
         with:
           enable-cache: true
           cache-dependency-glob: "app/uv.lock"
       - run: uv sync --locked
         working-directory: app
-      - run: uv run python scraper.py | tee ../run_output.txt
+      - run: |
+          set -o pipefail
+          uv run python scraper.py | tee ../run_output.txt
         working-directory: app
       - name: Commit updated data
         # Sources run independently now (see scraper.py) — one failing
         # shouldn't discard data the others successfully collected. The
-        # scrape step still exits non-zero on any source failure (GH
-        # Actions' default bash has pipefail on, so the `tee` doesn't mask
-        # it), which is what makes the run show up red in the Actions tab.
+        # scrape step explicitly sets `pipefail` (omitting `shell:` on Linux
+        # runs `bash -e` without `pipefail`, which let `tee` mask scraper
+        # failures as green runs) so any source failure marks the run red.
         if: always()
         run: |
           git config user.name "github-actions[bot]"

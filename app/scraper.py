@@ -1,4 +1,5 @@
 import sys
+import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from sqlalchemy import func
@@ -70,14 +71,18 @@ def main():
         for future in as_completed(futures):
             exc = future.exception()
             if exc:
-                errors.append(exc)
+                name = futures[future].__name__.rsplit(".", 1)[-1]
+                errors.append((name, exc))
 
     summary_session = get_session()
     _print_summary(summary_session)
     summary_session.close()
 
     if errors:
-        raise errors[0]
+        for name, exc in errors:
+            print(f"\n=== Error in {name} ===", file=sys.stderr)
+            traceback.print_exception(exc, file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

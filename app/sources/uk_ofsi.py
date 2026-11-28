@@ -5,15 +5,19 @@ import re
 import http_client
 from models import CryptoAddress, SanctionedEntity
 
-# Confirmed stable, unauthenticated, no token required.
-OFSI_CSV_URL = "https://ofsistorage.blob.core.windows.net/publishlive/2022format/ConList.csv"
+# The legacy OFSI Consolidated List (ofsistorage.blob.core.windows.net/
+# publishlive/2022format/ConList.csv) closed on 28 Jan 2026 and its Azure
+# Blob storage account now returns 409 (public access disabled). All UK
+# designations are now consolidated into the FCDO UK Sanctions List (UKSL).
+OFSI_CSV_URL = "https://sanctionslist.fcdo.gov.uk/docs/UK-Sanctions-List.csv"
 
-# Row 1 is a "Last Updated,<date>" banner line, not part of the table —
+# Row 1 is a "Report Date: <date>" banner line, not part of the table —
 # the real header is row 2. Key columns: "Name 6" holds the full name for
 # Entity-type rows (e.g. "GARANTEX EUROPE OU"); Name 1-5 are individual name
 # parts (title/forename/middle/surname/suffix) and are empty for entities.
-# "Group ID" is the true entity identifier — OFSI emits one row per
-# name/alias variant, so multiple rows can share a Group ID.
+# "OFSI Group ID" preserves the legacy entity identifier for continuity with
+# existing DB rows, falling back to "Unique ID" for non-OFSI entries — UKSL
+# emits one row per name/alias variant, so multiple rows can share an ID.
 NAME_PARTS = ["Name 1", "Name 2", "Name 3", "Name 4", "Name 5"]
 
 # Unlike OFAC's SDN remarks (one consistent "Digital Currency Address - X Y"
@@ -73,7 +77,7 @@ def run(session):
 
     for row in fetch_rows():
         seen_rows += 1
-        group_id = row.get("Group ID", "").strip()
+        group_id = (row.get("OFSI Group ID", "") or row.get("Unique ID", "")).strip()
         if not group_id:
             continue
 
@@ -82,8 +86,8 @@ def run(session):
         group = groups.setdefault(group_id, {"addresses": {}})
         if addresses:
             group["name"] = _entity_name(row)
-            group["entity_type"] = row.get("Group Type", "").strip()
-            group["programs"] = row.get("Regime", "").strip()
+            group["entity_type"] = row.get("Designation Type", "").strip()
+            group["programs"] = row.get("Regime Name", "").strip()
             group["remarks"] = other_info
             for chain, address in addresses:
                 group["addresses"][address] = chain

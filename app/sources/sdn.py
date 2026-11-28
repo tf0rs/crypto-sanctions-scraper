@@ -66,6 +66,10 @@ def fetch_rows():
         yield dict(zip(COLUMNS, (_clean(v) for v in row)))
 
 
+def _normalize_chain(chain):
+    return "BTC" if chain == "XBT" else chain
+
+
 def fetch_digital_currency_addresses():
     """Returns {ent_num: [(chain, address), ...]}, parsed from the
     SDN_ADVANCED.XML export. Chain tickers are read from the file's own
@@ -91,7 +95,9 @@ def fetch_digital_currency_addresses():
         if elem.tag == XML_NS + "FeatureType":
             label = elem.text or ""
             if label.startswith("Digital Currency Address - "):
-                chain_by_feature_type[elem.get("ID")] = label.removeprefix("Digital Currency Address - ")
+                chain_by_feature_type[elem.get("ID")] = _normalize_chain(
+                    label.removeprefix("Digital Currency Address - ")
+                )
             elem.clear()
 
         elif elem.tag == XML_NS + "DistinctParty":
@@ -136,7 +142,7 @@ def run(session):
             session.add(entity)
             session.flush()  # need entity.id to attach CryptoAddress rows
         entity.name = row["name"]
-        entity.entity_type = row["entity_type"]
+        entity.entity_type = (row["entity_type"] or "entity").lower()
         entity.programs = row["program"]
         entity.remarks = row["remarks"]
 
@@ -179,6 +185,8 @@ def run(session):
         for address, chain in target_by_address.items():
             if address not in existing_by_address:
                 session.add(CryptoAddress(entity_id=entity.id, address=address, chain=chain))
+            elif existing_by_address[address].chain != chain:
+                existing_by_address[address].chain = chain
 
         upserted += 1
 

@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -40,3 +41,4 @@ def set_checkpoint(session, scraper_name, value):
         row = ScraperCheckpoint(scraper_name=scraper_name)
         session.add(row)
     row.checkpoint = value
+    row.updated_at = datetime.now(timezone.utc)

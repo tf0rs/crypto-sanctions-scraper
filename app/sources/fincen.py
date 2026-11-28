@@ -71,10 +71,14 @@ def _matched_keywords(text):
     return sorted({m.group(0).lower() for m in KEYWORD_RE.finditer(text)})
 
 
+def _normalize_url(url):
+    return url.rstrip("/")
+
+
 def _advisory_urls():
     resp = http_client.get(SITEMAP_URL, timeout=REQUEST_TIMEOUT)
     pattern = rf"<loc>({re.escape(ADVISORY_PREFIX)}[^<]+)</loc>"
-    return sorted(set(re.findall(pattern, resp.text)))
+    return sorted({_normalize_url(u) for u in re.findall(pattern, resp.text)})
 
 
 def _extract_page(url):
@@ -130,7 +134,8 @@ def run(session):
     DB-related happens inside the pool."""
     urls = _advisory_urls()
     already_stored = {
-        row.url for row in session.query(PressRelease.url).filter_by(source="FINCEN")
+        _normalize_url(row.url)
+        for row in session.query(PressRelease.url).filter_by(source="FINCEN")
     }
     todo = [u for u in urls if u not in already_stored][:MAX_ADVISORIES_PER_RUN]
 

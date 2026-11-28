@@ -54,6 +54,8 @@ def _parse_addresses(other_info):
     addresses = []
     for match in DIGITAL_CURRENCY_RE.finditer(other_info):
         chain, address = match.group(1), match.group(2).rstrip(".")
+        if chain == "XBT":
+            chain = "BTC"
         addresses.append((chain, address))
     return addresses
 
@@ -86,7 +88,7 @@ def run(session):
         group = groups.setdefault(group_id, {"addresses": {}})
         if addresses:
             group["name"] = _entity_name(row)
-            group["entity_type"] = row.get("Designation Type", "").strip()
+            group["entity_type"] = row.get("Designation Type", "").strip().lower()
             group["programs"] = row.get("Regime Name", "").strip()
             group["remarks"] = other_info
             for chain, address in addresses:

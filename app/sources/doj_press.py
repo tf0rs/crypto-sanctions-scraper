@@ -1,3 +1,4 @@
+import html
 import re
 import time
 from datetime import datetime, timezone
@@ -21,33 +22,73 @@ SCRAPER_NAME = "doj_press"
 PAGE_SIZE = 20
 MAX_PAGES_PER_RUN = 25  # backstop so a reset/first run doesn't walk the full ~269k-row archive
 
-KEYWORDS = [
+# Layer 1: high-precision crypto, ransomware, sanctions, and hacking terms.
+# Any hit here is included unconditionally.
+CORE_KEYWORDS = [
     "ransomware", "cryptocurrency", "crypto", "bitcoin", "virtual currency",
-    "digital asset", "money laundering", "sanctions", "ofac", "darknet",
-    "cyber", "hacking",
+    "digital asset", "sanctions", "ofac", "darknet", "hacking",
 ]
-# "crypto" and "cyber" need care, not a plain \bterm\b. A full \b...\b on
-# "crypto" misses genuine hits like "cryptocurrencies" (plural) and
-# "cryptojacking" — \b requires a non-word char right after "crypto", which
-# those don't have — while an unbounded match wrongly hits
-# "cryptography"/"cryptographic". Both failure modes confirmed on
-# europol.py's data, which shares this exact keyword-matching approach. A
-# negative lookahead threads the needle for "crypto": allow any
-# continuation except "graph". "cyber" gets no trailing boundary at all, on
-# purpose, so it still matches compounds like "cybercrime"/"cybersecurity".
-_KEYWORD_PARTS = []
-for kw in KEYWORDS:
-    if kw == "crypto":
-        _KEYWORD_PARTS.append(r"\bcrypto(?!graph)")
-    elif kw == "cyber":
-        _KEYWORD_PARTS.append(r"\bcyber")
-    else:
-        _KEYWORD_PARTS.append(r"\b" + re.escape(kw) + r"\b")
-KEYWORD_RE = re.compile("(?:" + "|".join(_KEYWORD_PARTS) + ")", re.IGNORECASE)
+# Tag-only / broad keywords: recorded in `matched_keywords` when a release is
+# included, but NOT sufficient on their own. Confirmed empirically across 1,100
+# DOJ releases: standalone "money laundering" (457 rows) pulled in unrelated
+# COVID/healthcare/cartel fraud, and standalone "cyber" (326 rows) pulled in
+# 177 CSAM cases (via NCMEC "CyberTipline"), cyberstalking, and unrelated cases
+# citing a prosecutor's "Cybercrime Unit" boilerplate.
+TAG_KEYWORDS = ["money laundering", "cyber"]
+KEYWORDS = CORE_KEYWORDS + TAG_KEYWORDS
+
+# Layer 2 (for `cyber`-only hits): exclude CSAM / cyberstalking noise and
+# require at least one concrete cyber-threat / cyber-fraud signal so
+# prosecutor unit boilerplate alone doesn't trigger inclusion.
+CYBER_EXCLUDE_RE = re.compile(
+    r"cybertipline|cybertip|cyberstalk|child sexual|child pornography|"
+    r"project safe childhood|exploitation of children",
+    re.IGNORECASE,
+)
+CYBER_SIGNAL_RE = re.compile(
+    r"\b(?:"
+    r"cyberattack|cyber-attack|cyber espionage|cyberespionage|cyber intrusion|"
+    r"cyber-enabled|cybercrime marketplace|cybersecurity fraud|"
+    r"malware|botnet|phishing|ddos|data breach|computer intrusion|"
+    r"computer fraud|unauthorized access|account takeover|account-takeover|"
+    r"sim swap|carding|remote it worker"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _compile_keyword_re(terms):
+    # "crypto" uses a negative lookahead to match "cryptocurrencies"/
+    # "cryptojacking" without hitting "cryptography". "cyber" excludes
+    # "cybertip*" and "cyberstalk*" while still matching "cybercrime"/
+    # "cybersecurity"/"cyberattack".
+    parts = []
+    for kw in terms:
+        if kw == "crypto":
+            parts.append(r"\bcrypto(?!graph)")
+        elif kw == "cyber":
+            parts.append(r"\bcyber(?!tip|stalk)")
+        else:
+            parts.append(r"\b" + re.escape(kw) + r"\b")
+    return re.compile("(?:" + "|".join(parts) + ")", re.IGNORECASE)
+
+
+CORE_KEYWORD_RE = _compile_keyword_re(CORE_KEYWORDS)
+KEYWORD_RE = _compile_keyword_re(KEYWORDS)
 
 
 def _matched_keywords(text):
-    return sorted({m.group(0).lower() for m in KEYWORD_RE.finditer(text)})
+    if CORE_KEYWORD_RE.search(text):
+        return sorted({m.group(0).lower() for m in KEYWORD_RE.finditer(text)})
+    # Layer 2: allow cyber-only releases only when corroborated by a concrete
+    # cyber-threat signal and not CSAM/cyberstalking.
+    if (
+        re.search(r"\bcyber(?!tip|stalk)", text, re.IGNORECASE)
+        and not CYBER_EXCLUDE_RE.search(text)
+        and CYBER_SIGNAL_RE.search(text)
+    ):
+        return sorted({m.group(0).lower() for m in KEYWORD_RE.finditer(text)})
+    return []
 
 
 def _parse_epoch(value):
@@ -103,7 +144,8 @@ def run(session):
                 hit_checkpoint = True
                 break
 
-            keywords = _matched_keywords(f"{item['title']}\n{item.get('body', '')}")
+            title = html.unescape(item["title"])
+            keywords = _matched_keywords(f"{title}\n{item.get('body', '')}")
             if not keywords:
                 continue
 
@@ -114,7 +156,7 @@ def run(session):
                 PressRelease(
                     source="DOJ",
                     external_id=item.get("uuid"),
-                    title=item["title"],
+                    title=title,
                     url=item["url"],
                     published_at=_parse_epoch(item.get("created")),
                     matched_keywords=",".join(keywords),
